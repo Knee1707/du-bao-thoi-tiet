@@ -18,12 +18,26 @@ function isMissingTableError(error) {
 /**
  * Tạo một lịch hoạt động mới
  */
-async function createSchedule({ activity_type, start_hour, end_hour, date, latitude, longitude, note }) {
+
+async function createSchedule({ activity_type, start_hour, end_hour, start_minute = 0, end_minute = 0, date, latitude, longitude, note }) {
   if (!activity_type || typeof activity_type !== 'string') {
     throw new AppError('Loại hoạt động không hợp lệ.', 400, 'INVALID_ACTIVITY');
   }
-  if (start_hour == null || end_hour == null || start_hour < 0 || end_hour > 23 || start_hour >= end_hour) {
-    throw new AppError('Khung giờ không hợp lệ (start_hour < end_hour, cả hai trong 0-23).', 400, 'INVALID_TIME_RANGE');
+
+  const sh = Number(start_hour);
+  const eh = Number(end_hour);
+  const sm = Number(start_minute) || 0;
+  const em = Number(end_minute) || 0;
+
+  if (
+    start_hour == null || end_hour == null ||
+    sh < 0 || sh > 23 || eh < 0 || eh > 23 ||
+    sm < 0 || sm > 59 || em < 0 || em > 59
+  ) {
+    throw new AppError('Khung giờ không hợp lệ (giờ 0-23, phút 0-59).', 400, 'INVALID_TIME_RANGE');
+  }
+  if (sh * 60 + sm >= eh * 60 + em) {
+    throw new AppError('Giờ bắt đầu phải trước giờ kết thúc.', 400, 'INVALID_TIME_RANGE');
   }
   if (!date) {
     throw new AppError('Ngày không hợp lệ.', 400, 'INVALID_DATE');
@@ -31,8 +45,10 @@ async function createSchedule({ activity_type, start_hour, end_hour, date, latit
 
   const payload = {
     activity_type: activity_type.trim(),
-    start_hour: Number(start_hour),
-    end_hour: Number(end_hour),
+    start_hour: sh,
+    start_minute: sm,     // ➕
+    end_hour: eh,
+    end_minute: em,       // ➕
     date,
     latitude: Number(latitude || 10.762622),
     longitude: Number(longitude || 106.660172),
@@ -41,7 +57,6 @@ async function createSchedule({ activity_type, start_hour, end_hour, date, latit
   };
 
   if (!supabaseClient) {
-    // fallback in-memory (chỉ dùng khi chưa có Supabase)
     const record = { ...payload, id: `mem-${Date.now()}`, created_at: new Date().toISOString() };
     inMemorySchedules.push(record);
     return { success: true, data: record, storage: 'memory' };
@@ -61,7 +76,7 @@ async function createSchedule({ activity_type, start_hour, end_hour, date, latit
 
   return { success: true, data, storage: 'supabase' };
 }
-
+  
 /**
  * Lấy danh sách lịch (sắp xếp theo ngày mới nhất)
  */
@@ -137,16 +152,22 @@ async function getPendingSchedules() {
  * Cập nhật thông tin một lịch hoạt động
  */
 async function updateSchedule(id, updates) {
-  const { activity_type, start_hour, end_hour, date, latitude, longitude, note } = updates;
+  const { activity_type, start_hour, end_hour, start_minute, end_minute, date, latitude, longitude, note } = updates;
 
-  if (start_hour != null && end_hour != null && Number(start_hour) >= Number(end_hour)) {
-    throw new AppError('Khung giờ không hợp lệ (start_hour phải nhỏ hơn end_hour).', 400, 'INVALID_TIME_RANGE');
+  if (start_hour != null && end_hour != null) {
+    const sm = start_minute != null ? Number(start_minute) : 0;
+    const em = end_minute != null ? Number(end_minute) : 0;
+    if (Number(start_hour) * 60 + sm >= Number(end_hour) * 60 + em) {
+      throw new AppError('Khung giờ không hợp lệ (giờ bắt đầu phải trước giờ kết thúc).', 400, 'INVALID_TIME_RANGE');
+    }
   }
 
   const payload = {};
   if (activity_type != null) payload.activity_type = String(activity_type).trim();
   if (start_hour != null) payload.start_hour = Number(start_hour);
+  if (start_minute != null) payload.start_minute = Number(start_minute);   // ➕
   if (end_hour != null) payload.end_hour = Number(end_hour);
+  if (end_minute != null) payload.end_minute = Number(end_minute);         // ➕
   if (date != null) payload.date = date;
   if (latitude != null) payload.latitude = Number(latitude);
   if (longitude != null) payload.longitude = Number(longitude);

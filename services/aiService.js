@@ -1,11 +1,12 @@
 const axios = require('axios');
-const { geminiApiKey, openWeatherApiKey } = require('../config/env');
+const { groqApiKey, openWeatherApiKey } = require('../config/env');
 const { getForecast, getCurrentWeather, resolveLocation, suggestActivityWindows } = require('./weatherService');
 const { createSchedule, getSchedules, updateSchedule, deleteSchedule } = require('./scheduleService');
 const { AppError } = require('../utils/appError');
 const logger = require('../config/logger');
 
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent';
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODEL = 'llama-3.1-8b-instant';
 
 const DEFAULT_LAT = 10.762622;
 const DEFAULT_LON = 106.660172;
@@ -85,26 +86,32 @@ DỰ BÁO:
 }
 
 /**
- * Gọi Gemini API — tự retry khi 429, ném AppError rõ ràng cho các lỗi khác
+ * Gọi Groq API (chuẩn OpenAI-compatible) — tự retry khi 429, ném AppError rõ ràng cho các lỗi khác
  */
-async function callGemini(systemPrompt, userMessage, retries = 2) {
-  if (!geminiApiKey) {
-    throw new AppError('Chưa cấu hình GEMINI_API_KEY.', 500, 'MISSING_GEMINI_KEY');
+async function callGroq(systemPrompt, userMessage, retries = 2) {
+  if (!groqApiKey) {
+    throw new AppError('Chưa cấu hình GROQ_API_KEY.', 500, 'MISSING_GROQ_KEY');
   }
 
   const body = {
-    contents: [
-      { role: 'user', parts: [{ text: `${systemPrompt}\n\nNgười dùng: ${userMessage}` }] }
+    model: GROQ_MODEL,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userMessage }
     ],
-    generationConfig: { temperature: 0.7, maxOutputTokens: 1024 }
+    temperature: 0.7,
+    max_tokens: 1024
   };
 
   try {
-    const response = await axios.post(`${GEMINI_API_URL}?key=${geminiApiKey}`, body, {
-      headers: { 'Content-Type': 'application/json' },
+    const response = await axios.post(GROQ_API_URL, body, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${groqApiKey}`
+      },
       timeout: 30000
     });
-    const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const text = response.data?.choices?.[0]?.message?.content || '';
     return text.trim();
   } catch (err) {
     const status = err.response?.status;
@@ -112,18 +119,18 @@ async function callGemini(systemPrompt, userMessage, retries = 2) {
 
     if (status === 429 && retries > 0) {
       const retryAfterSec = Number(err.response?.headers?.['retry-after']) || 5;
-      logger.warn(`Gemini 429 - đợi ${retryAfterSec}s rồi thử lại`, { retriesLeft: retries });
+      logger.warn(`Groq 429 - đợi ${retryAfterSec}s rồi thử lại`, { retriesLeft: retries });
       await sleep(retryAfterSec * 1000);
-      return callGemini(systemPrompt, userMessage, retries - 1);
+      return callGroq(systemPrompt, userMessage, retries - 1);
     }
 
-    logger.error('Gemini API lỗi', { status, apiMessage });
+    logger.error('Groq API lỗi', { status, apiMessage });
 
-    if (status === 429) throw new AppError('Gemini API đã hết hạn mức (quota). Vui lòng thử lại sau ít phút.', 502, 'GEMINI_RATE_LIMIT');
-    if (status === 400) throw new AppError('Yêu cầu gửi tới Gemini không hợp lệ (có thể sai tên model).', 502, 'GEMINI_BAD_REQUEST');
-    if (status === 403 || status === 401) throw new AppError('GEMINI_API_KEY không hợp lệ hoặc chưa được cấp quyền.', 502, 'GEMINI_AUTH_ERROR');
-    if (err.code === 'ECONNABORTED') throw new AppError('Gemini API phản hồi quá chậm (timeout).', 502, 'GEMINI_TIMEOUT');
-    throw new AppError(`Không thể kết nối tới Gemini API: ${apiMessage}`, 502, 'GEMINI_NETWORK_ERROR');
+    if (status === 429) throw new AppError('Groq API đã hết hạn mức (quota). Vui lòng thử lại sau ít phút.', 502, 'GROQ_RATE_LIMIT');
+    if (status === 400) throw new AppError('Yêu cầu gửi tới Groq không hợp lệ (có thể sai tên model).', 502, 'GROQ_BAD_REQUEST');
+    if (status === 403 || status === 401) throw new AppError('GROQ_API_KEY không hợp lệ hoặc chưa được cấp quyền.', 502, 'GROQ_AUTH_ERROR');
+    if (err.code === 'ECONNABORTED') throw new AppError('Groq API phản hồi quá chậm (timeout).', 502, 'GROQ_TIMEOUT');
+    throw new AppError(`Không thể kết nối tới Groq API: ${apiMessage}`, 502, 'GROQ_NETWORK_ERROR');
   }
 }
 
@@ -168,6 +175,8 @@ Nhiệm vụ: phân tích tin nhắn và trả về JSON theo format sau (KHÔNG
   "reply_hint": string
 }
 
+CHỈ trả về JSON thuần túy, không thêm \`\`\`json hay bất kỳ chữ nào khác trước/sau.
+
 Ngày hôm nay (giờ Việt Nam): ${new Date().toLocaleDateString('vi-VN')} — ${new Date().toISOString().split('T')[0]}
 Quy tắc giờ: "chiều nay" → 14:00-18:00, "sáng mai" → 07:00-11:00, "tối nay" → 18:00-22:00.
 
@@ -180,7 +189,7 @@ Ví dụ:
 - "giờ nào đẹp để chạy bộ hôm nay" → suggest_time, suggest.activity_type="chạy bộ", suggest.location_name=null`;
 
   try {
-    const raw = await callGemini(systemPrompt, userMessage);
+    const raw = await callGroq(systemPrompt, userMessage);
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return { intent: 'other', reply_hint: '' };
     return JSON.parse(jsonMatch[0]);
@@ -229,7 +238,7 @@ ${weatherContext}`;
 
     let aiReply;
     try {
-      aiReply = await callGemini(systemPrompt, contextMessage);
+      aiReply = await callGroq(systemPrompt, contextMessage);
     } catch (err) {
       aiReply = scheduleError
         ? `Không thể tạo lịch "${activity_type}" lúc ${start_hour}h-${end_hour}h ngày ${date}: ${scheduleError}`
@@ -390,10 +399,10 @@ ${weatherContext}`;
 
   let aiReply;
   try {
-    aiReply = await callGemini(systemPrompt, message);
+    aiReply = await callGroq(systemPrompt, message);
   } catch (err) {
-    aiReply = err.errorCode === 'GEMINI_RATE_LIMIT'
-      ? 'Trợ lý AI đang bị giới hạn số lượt hỏi (quota Gemini miễn phí). Bạn đợi khoảng 1 phút rồi hỏi lại nhé!'
+    aiReply = err.errorCode === 'GROQ_RATE_LIMIT'
+      ? 'Trợ lý AI đang bị giới hạn số lượt hỏi (quota Groq miễn phí). Bạn đợi khoảng 1 phút rồi hỏi lại nhé!'
       : 'Xin lỗi, trợ lý AI đang gặp sự cố kết nối. Bạn có thể xem trực tiếp dữ liệu thời tiết trên dashboard trong lúc chờ nhé!';
   }
 

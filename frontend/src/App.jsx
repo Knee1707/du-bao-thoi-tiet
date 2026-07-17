@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import {
-  Activity, Bell, BellRing, Bot, Calendar, CalendarDays, CheckCircle2,
-  ChevronRight, Clock, Droplets, Gauge, LoaderCircle, MessageCircle,
+  Activity, Bell, BellRing, Bot, Calendar, CalendarDays,
+  Droplets, Gauge, LoaderCircle, MessageCircle,
   Plus, Search, Send, SunMedium, Wind, X, CloudRain, Umbrella,
-  RefreshCw, Pencil, Trash2, MapPin, Eye, Sun, Bike, PersonStanding, Plane   // ➕
+  RefreshCw, Pencil, Trash2, MapPin, Eye, Sun, PersonStanding
 } from 'lucide-react';
 import {
   CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis
@@ -20,8 +20,21 @@ function formatDate(value) {
   });
 }
 
-function formatHour(h) {
-  return `${String(h).padStart(2, '0')}:00`;
+function formatHour(h, m = 0) {
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+// Parse các kiểu gõ tay: "6h31", "06h31", "6:31", "18g", "8" ...
+function parseTimeInput(text) {
+  if (!text) return null;
+  const trimmed = text.trim();
+  const match = trimmed.match(/^(\d{1,2})\s*[hHgG:.]?\s*(\d{1,2})?$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = match[2] != null && match[2] !== '' ? Number(match[2]) : 0;
+  if (Number.isNaN(hour) || hour < 0 || hour > 23) return null;
+  if (Number.isNaN(minute) || minute < 0 || minute > 59) return null;
+  return { hour, minute };
 }
 
 function rainLevelColor(level) {
@@ -61,6 +74,43 @@ function formatSlotDateTime(isoTime) {
 }
 
 const ACTIVITY_TYPES = ['xịt thuốc', 'phơi đồ', 'tưới cây', 'đi dạo', 'chạy bộ', 'khác'];
+
+const TIME_PRESETS = [
+  { label: 'Sáng sớm', start_hour: 5, end_hour: 7 },
+  { label: 'Buổi sáng', start_hour: 7, end_hour: 11 },
+  { label: 'Buổi trưa', start_hour: 11, end_hour: 13 },
+  { label: 'Buổi chiều', start_hour: 13, end_hour: 17 },
+  { label: 'Chiều tối', start_hour: 17, end_hour: 19 },
+  { label: 'Buổi tối', start_hour: 19, end_hour: 22 }
+];
+
+const DEFAULT_TIME_KEY = 'weather_app_default_schedule_time';
+
+function getSavedDefaultTime() {
+  try {
+    const raw = localStorage.getItem(DEFAULT_TIME_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        start_hour: parsed.start_hour ?? 8,
+        start_minute: parsed.start_minute ?? 0,
+        end_hour: parsed.end_hour ?? 12,
+        end_minute: parsed.end_minute ?? 0
+      };
+    }
+  } catch {
+    // bỏ qua nếu localStorage lỗi/không khả dụng
+  }
+  return { start_hour: 8, start_minute: 0, end_hour: 12, end_minute: 0 };
+}
+
+function saveDefaultTime(start_hour, start_minute, end_hour, end_minute) {
+  try {
+    localStorage.setItem(DEFAULT_TIME_KEY, JSON.stringify({ start_hour, start_minute, end_hour, end_minute }));
+  } catch {
+    // bỏ qua
+  }
+}
 
 const AUTO_UPDATE_MS = {
   '5 phút': 5 * 60 * 1000,
@@ -144,20 +194,59 @@ function ScheduleModal({ onClose, onSaved, lat, lon, editingSchedule }) {
           activity_type: editingSchedule.activity_type,
           date: editingSchedule.date,
           start_hour: editingSchedule.start_hour,
+          start_minute: editingSchedule.start_minute || 0,
           end_hour: editingSchedule.end_hour,
+          end_minute: editingSchedule.end_minute || 0,
           note: editingSchedule.note || ''
         }
       : {
           activity_type: 'phơi đồ',
           date: new Date().toISOString().split('T')[0],
-          start_hour: 8,
-          end_hour: 12,
+          ...getSavedDefaultTime(),
           note: ''
         }
   );
+
+  const [startTimeText, setStartTimeText] = useState(formatHour(form.start_hour, form.start_minute));
+  const [endTimeText, setEndTimeText] = useState(formatHour(form.end_hour, form.end_minute));
+  const [startTimeError, setStartTimeError] = useState('');
+  const [endTimeError, setEndTimeError] = useState('');
+
+  const [setAsDefault, setSetAsDefault] = useState(false);
   const [loading, setLoading] = useState(false);
   const [forecastCheck, setForecastCheck] = useState(null);
   const [checking, setChecking] = useState(false);
+
+  // Đồng bộ ô nhập text mỗi khi giờ đổi qua preset/chọn nhanh
+  useEffect(() => {
+    setStartTimeText(formatHour(form.start_hour, form.start_minute));
+  }, [form.start_hour, form.start_minute]);
+
+  useEffect(() => {
+    setEndTimeText(formatHour(form.end_hour, form.end_minute));
+  }, [form.end_hour, form.end_minute]);
+
+  function handleStartTimeChange(text) {
+    setStartTimeText(text);
+    const parsed = parseTimeInput(text);
+    if (!parsed) {
+      setStartTimeError(text.trim() ? 'Giờ không hợp lệ (VD: 6h31, 18:00)' : '');
+      return;
+    }
+    setStartTimeError('');
+    setForm((f) => ({ ...f, start_hour: parsed.hour, start_minute: parsed.minute }));
+  }
+
+  function handleEndTimeChange(text) {
+    setEndTimeText(text);
+    const parsed = parseTimeInput(text);
+    if (!parsed) {
+      setEndTimeError(text.trim() ? 'Giờ không hợp lệ (VD: 19h00, 20:15)' : '');
+      return;
+    }
+    setEndTimeError('');
+    setForm((f) => ({ ...f, end_hour: parsed.hour, end_minute: parsed.minute }));
+  }
 
   async function checkForecast() {
     setChecking(true);
@@ -175,12 +264,25 @@ function ScheduleModal({ onClose, onSaved, lat, lon, editingSchedule }) {
 
   async function handleSubmit(e) {
     e.preventDefault();
+
+    if (startTimeError || endTimeError) {
+      alert('Vui lòng nhập giờ đúng định dạng (VD: 6h31) trước khi lưu.');
+      return;
+    }
+    const startTotal = form.start_hour * 60 + form.start_minute;
+    const endTotal = form.end_hour * 60 + form.end_minute;
+    if (startTotal >= endTotal) {
+      alert('Giờ bắt đầu phải trước giờ kết thúc.');
+      return;
+    }
+
     setLoading(true);
     try {
       if (isEditing) {
         await axios.put(`${API_BASE}/schedule/${editingSchedule.id}`, { ...form, latitude: lat, longitude: lon });
       } else {
         await axios.post(`${API_BASE}/schedule`, { ...form, latitude: lat, longitude: lon });
+        if (setAsDefault) saveDefaultTime(form.start_hour, form.start_minute, form.end_hour, form.end_minute);
       }
       onSaved();
       onClose();
@@ -230,33 +332,72 @@ function ScheduleModal({ onClose, onSaved, lat, lon, editingSchedule }) {
             />
           </div>
 
-          {/* Time range */}
+          {/* Time range — tự gõ giờ, VD: 6h31 */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs text-slate-400 mb-1">Giờ bắt đầu</label>
-              <select
-                value={form.start_hour}
-                onChange={(e) => setForm({ ...form, start_hour: Number(e.target.value) })}
-                className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-sky-500"
-              >
-                {Array.from({ length: 24 }, (_, i) => (
-                  <option key={i} value={i}>{formatHour(i)}</option>
-                ))}
-              </select>
+              <input
+                type="text"
+                value={startTimeText}
+                onChange={(e) => handleStartTimeChange(e.target.value)}
+                placeholder="VD: 6h31"
+                className={`w-full rounded-xl border bg-slate-800 px-3 py-2 text-sm text-white outline-none ${
+                  startTimeError ? 'border-rose-500/60 focus:border-rose-500' : 'border-slate-700 focus:border-sky-500'
+                }`}
+              />
+              {startTimeError && <p className="text-[10px] text-rose-400 mt-1">{startTimeError}</p>}
             </div>
             <div>
               <label className="block text-xs text-slate-400 mb-1">Giờ kết thúc</label>
-              <select
-                value={form.end_hour}
-                onChange={(e) => setForm({ ...form, end_hour: Number(e.target.value) })}
-                className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-sky-500"
-              >
-                {Array.from({ length: 24 }, (_, i) => (
-                  <option key={i} value={i}>{formatHour(i)}</option>
-                ))}
-              </select>
+              <input
+                type="text"
+                value={endTimeText}
+                onChange={(e) => handleEndTimeChange(e.target.value)}
+                placeholder="VD: 19h00"
+                className={`w-full rounded-xl border bg-slate-800 px-3 py-2 text-sm text-white outline-none ${
+                  endTimeError ? 'border-rose-500/60 focus:border-rose-500' : 'border-slate-700 focus:border-sky-500'
+                }`}
+              />
+              {endTimeError && <p className="text-[10px] text-rose-400 mt-1">{endTimeError}</p>}
             </div>
           </div>
+
+          {/* Chọn nhanh khung giờ */}
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Chọn nhanh</label>
+            <div className="flex gap-2 flex-wrap">
+              {TIME_PRESETS.map((p) => (
+                <button
+                  type="button"
+                  key={p.label}
+                  onClick={() =>
+                    setForm({ ...form, start_hour: p.start_hour, start_minute: 0, end_hour: p.end_hour, end_minute: 0 })
+                  }
+                  className={`rounded-xl border px-3 py-1.5 text-xs transition ${
+                    form.start_hour === p.start_hour && form.start_minute === 0 &&
+                    form.end_hour === p.end_hour && form.end_minute === 0
+                      ? 'border-sky-500/60 bg-sky-500/10 text-sky-300'
+                      : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:bg-slate-700/60'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Lưu khung giờ này làm mặc định cho lần đặt lịch sau */}
+          {!isEditing && (
+            <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={setAsDefault}
+                onChange={(e) => setSetAsDefault(e.target.checked)}
+                className="rounded border-slate-600 bg-slate-800 accent-sky-500"
+              />
+              Đặt khung giờ này làm mặc định cho lần sau
+            </label>
+          )}
 
           {/* Note */}
           <div>
@@ -498,7 +639,7 @@ function ScheduleList({ schedules, onAddNew, onEdit, onDelete }) {
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-white text-sm truncate">{s.activity_type}</p>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    {s.date} · {formatHour(s.start_hour)} – {formatHour(s.end_hour)}
+                    {s.date} · {formatHour(s.start_hour, s.start_minute)} – {formatHour(s.end_hour, s.end_minute)}
                   </p>
                   {s.note && <p className="text-xs text-slate-500 mt-0.5 truncate">{s.note}</p>}
                 </div>
@@ -578,13 +719,13 @@ export default function App() {
   }, []);
 
   const loadForecastSeries = useCallback(async (lat, lon, step) => {
-  try {
-    const res = await axios.get(`${API_BASE}/weather/forecast/series?lat=${lat}&lon=${lon}&step=${step}&hours=6`);
-    setForecastSeries(res.data?.data?.series || []);
-    setSelectedSeriesIndex(0);
-  } catch {
-    setForecastSeries([]);
-  }
+    try {
+      const res = await axios.get(`${API_BASE}/weather/forecast/series?lat=${lat}&lon=${lon}&step=${step}&hours=6`);
+      setForecastSeries(res.data?.data?.series || []);
+      setSelectedSeriesIndex(0);
+    } catch {
+      setForecastSeries([]);
+    }
   }, []);
 
   const loadDayForecast = useCallback(async (lat, lon, date) => {
@@ -626,18 +767,6 @@ export default function App() {
       // schedule/alert tables may not exist yet — silently ignore
     }
   }, []);
-
-  async function loadDashboard(lat = coords.lat, lon = coords.lon) {
-    setLoading(true);
-    setError('');
-    try {
-      await Promise.all([loadWeather(lat, lon), loadScheduleData()]);
-    } catch (err) {
-      setError(err?.response?.data?.message || 'Không thể tải dữ liệu thời tiết.');
-    } finally {
-      setLoading(false);
-    }
-  }
 
   async function handleSearch(e) {
     e.preventDefault();
@@ -706,7 +835,7 @@ export default function App() {
       try {
         let lat, lon;
         try {
-          const geo = await getDeviceLocation();          // ➕ ưu tiên vị trí thiết bị
+          const geo = await getDeviceLocation();
           lat = geo.lat;
           lon = geo.lon;
           setCoords({ lat, lon });
@@ -716,7 +845,6 @@ export default function App() {
             setCity(currentRes.data.data.city || city);
           }
         } catch {
-          // Người dùng từ chối định vị hoặc lỗi → fallback về thành phố mặc định
           const currentRes = await axios.get(`${API_BASE}/weather/city?city=${encodeURIComponent(city)}`);
           const data = currentRes.data?.data;
           if (data) {
@@ -789,30 +917,48 @@ export default function App() {
     }
   }, []);
 
-  // Kiểm tra mỗi phút: nếu đến giờ bắt đầu của lịch nào đó hôm nay -> gửi notification
+  // Nhắc lịch: khi đến giờ:phút bắt đầu, thông báo kèm đánh giá "nên làm hay không, vì sao"
   const notifiedRef = useRef(new Set());
   useEffect(() => {
-    const id = setInterval(() => {
+    const id = setInterval(async () => {
       if (!('Notification' in window) || Notification.permission !== 'granted') return;
       const now = new Date();
       const todayStr = now.toISOString().split('T')[0];
+      const nowTotal = now.getHours() * 60 + now.getMinutes();
 
-      schedules.forEach((s) => {
+      for (const s of schedules) {
+        if (s.status === 'done') continue;
         const key = `${s.id}-${s.date}`;
-        if (s.date !== todayStr) return;
-        if (notifiedRef.current.has(key)) return;
-        if (now.getHours() === Number(s.start_hour) && now.getMinutes() < 2) {
-          new Notification('⏰ Đến giờ rồi!', {
-            body: `Đã đến giờ "${s.activity_type}" (${formatHour(s.start_hour)} - ${formatHour(s.end_hour)}). ${s.note ? 'Ghi chú: ' + s.note : ''}`,
-            icon: '/vite.svg'
-          });
-          notifiedRef.current.add(key);
+        if (s.date !== todayStr) continue;
+
+        const schedTotal = Number(s.start_hour) * 60 + Number(s.start_minute || 0);
+        if (nowTotal < schedTotal || nowTotal > schedTotal + 1) continue; // đúng phút, trễ tối đa 1 phút
+        if (notifiedRef.current.has(key)) continue;
+
+        notifiedRef.current.add(key);
+
+        let body = `Đã đến giờ "${s.activity_type}" (${formatHour(s.start_hour, s.start_minute)} - ${formatHour(s.end_hour, s.end_minute)}).`;
+
+        try {
+          const res = await axios.get(
+            `${API_BASE}/schedule/check?lat=${coords.lat}&lon=${coords.lon}&start_hour=${s.start_hour}&end_hour=${s.end_hour}`
+          );
+          const check = res.data?.data;
+          if (check) {
+            body += check.suitable
+              ? ` ✅ Thời tiết thuận lợi (khả năng mưa ${check.max_rain_chance}%), bạn nên ${s.activity_type} như dự định.`
+              : ` ⚠️ ${check.message}`;
+          }
+        } catch {
+          // Không lấy được đánh giá thời tiết -> vẫn báo giờ, chỉ bỏ qua phần lý do
         }
-      });
-    }, 30 * 1000); // kiểm tra mỗi 30 giây
+
+        new Notification('⏰ Đến giờ rồi!', { body, icon: '/vite.svg' });
+      }
+    }, 30 * 1000);
 
     return () => clearInterval(id);
-  }, [schedules]);
+  }, [schedules, coords]);
 
   // Chart data from history records
   const chartData = useMemo(() => {
@@ -821,8 +967,6 @@ export default function App() {
       temperature: Number(item.temperature || 0)
     }));
   }, [history]);
-
-  const currentForecastSlot = forecast?.[selectedSlot] || null;
 
   return (
     <div className="min-h-screen bg-transparent px-4 py-6 text-slate-100 sm:px-6 lg:px-8">
@@ -981,7 +1125,7 @@ export default function App() {
                 )}
               </div>
             </section>
-            
+
             <section className="rounded-3xl border border-white/10 bg-slate-900/70 p-6 shadow-2xl shadow-slate-950/50 backdrop-blur">
               <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
                 <div className="flex items-center gap-2 text-slate-200">
@@ -1090,7 +1234,7 @@ export default function App() {
                     </button>
                   ))}
                 </div>
-                
+
                 {/* Danh sách mốc giờ thật, cuộn ngang */}
                 {forecastSeries.length > 0 ? (
                   <>

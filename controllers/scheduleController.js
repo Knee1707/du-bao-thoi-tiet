@@ -5,8 +5,8 @@ const { getForecast } = require('../services/weatherService');
 // POST /api/schedule — tạo lịch mới
 async function createScheduleController(req, res, next) {
   try {
-    const { activity_type, start_hour, end_hour, date, latitude, longitude, note } = req.body;
-    const result = await createSchedule({ activity_type, start_hour, end_hour, date, latitude, longitude, note });
+    const { activity_type, start_hour, end_hour, start_minute, end_minute, date, latitude, longitude, note } = req.body;
+    const result = await createSchedule({ activity_type, start_hour, end_hour, start_minute, end_minute, date, latitude, longitude, note });
     res.status(201).json(result);
   } catch (error) {
     next(error);
@@ -28,8 +28,8 @@ async function getSchedulesController(req, res, next) {
 async function updateScheduleController(req, res, next) {
   try {
     const { id } = req.params;
-    const { activity_type, start_hour, end_hour, date, latitude, longitude, note } = req.body;
-    const result = await updateSchedule(id, { activity_type, start_hour, end_hour, date, latitude, longitude, note });
+    const { activity_type, start_hour, end_hour, start_minute, end_minute, date, latitude, longitude, note } = req.body;
+    const result = await updateSchedule(id, { activity_type, start_hour, end_hour, start_minute, end_minute, date, latitude, longitude, note });
     res.status(200).json(result);
   } catch (error) {
     next(error);
