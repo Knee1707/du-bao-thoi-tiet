@@ -89,7 +89,7 @@ DỰ BÁO:
 /**
  * Gọi Groq API (chuẩn OpenAI-compatible) — tự retry khi 429, ném AppError rõ ràng cho các lỗi khác
  */
-async function callGroq(systemPrompt, userMessage, retries = 2) {
+async function callGroq(systemPrompt, userMessage, retries = 2, jsonMode = false) {
   if (!groqApiKey) {
     throw new AppError('Chưa cấu hình GROQ_API_KEY.', 500, 'MISSING_GROQ_KEY');
   }
@@ -100,8 +100,9 @@ async function callGroq(systemPrompt, userMessage, retries = 2) {
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userMessage }
     ],
-    temperature: 0.7,
-    max_tokens: 1024
+    temperature: jsonMode ? 0.2 : 0.7,
+    max_tokens: 1024,
+    ...(jsonMode ? { response_format: { type: 'json_object' } } : {})
   };
 
   try {
@@ -122,7 +123,7 @@ async function callGroq(systemPrompt, userMessage, retries = 2) {
       const retryAfterSec = Number(err.response?.headers?.['retry-after']) || 5;
       logger.warn(`Groq 429 - đợi ${retryAfterSec}s rồi thử lại`, { retriesLeft: retries });
       await sleep(retryAfterSec * 1000);
-      return callGroq(systemPrompt, userMessage, retries - 1);
+      return callGroq(systemPrompt, userMessage, retries - 1, jsonMode);
     }
 
     logger.error('Groq API lỗi', { status, apiMessage });
@@ -167,14 +168,18 @@ Nhiệm vụ: phân tích tin nhắn và trả về JSON theo format sau (KHÔNG
 
   "view_date": "YYYY-MM-DD" | "all",   // chỉ khi intent = "view_schedule"
 
-  "suggest": {                     // chỉ khi intent = "suggest_time"
-    "activity_type": string_or_null,     // vd "đi chơi", "chạy bộ", "đạp xe"; null = gợi ý tất cả loại
-    "location_name": string_or_null,     // tên nơi muốn đến; null = dùng vị trí hiện tại
-    "date": "YYYY-MM-DD"_or_null         // null = hôm nay
-  },
+    "suggest": {                     // chỉ khi intent = "suggest_time"
+      "activity_type": string_or_null,
+      "location_name": string_or_null,
+      "date": "YYYY-MM-DD"_or_null
+    },
 
-  "reply_hint": string
-}
+    "location_name": string_or_null,   // TÊN THÀNH PHỐ/ĐỊA ĐIỂM được nhắc trong câu hỏi, áp dụng cho MỌI intent
+                                        // (vd "ask_weather" hỏi thời tiết nơi khác, "create_schedule" đặt lịch ở nơi khác)
+                                        // để null nếu người dùng không nhắc tên địa điểm nào (dùng vị trí hiện tại)
+
+    "reply_hint": string
+  }
 
 CHỈ trả về JSON thuần túy, không thêm \`\`\`json hay bất kỳ chữ nào khác trước/sau.
 
@@ -187,10 +192,12 @@ Ví dụ:
 - "đổi lịch tưới cây sang 5h chiều" → update_schedule, target.activity_type="tưới cây", updates.start_hour=17
 - "hủy lịch chạy bộ sáng mai" → delete_schedule, target.activity_type="chạy bộ", target.date=ngày mai
 - "gợi ý giờ đẹp đi Đà Lạt chơi cuối tuần này" → suggest_time, suggest.location_name="Đà Lạt", suggest.activity_type="đi chơi"
-- "giờ nào đẹp để chạy bộ hôm nay" → suggest_time, suggest.activity_type="chạy bộ", suggest.location_name=null`;
+- "giờ nào đẹp để chạy bộ hôm nay" → suggest_time, suggest.activity_type="chạy bộ", suggest.location_name=null
+- "thời tiết ở Hồ Chí Minh hôm nay thế nào" → ask_weather, location_name="Hồ Chí Minh"
+- "đặt lịch tưới cây ở Cần Thơ 8h sáng mai" → create_schedule, location_name="Cần Thơ", schedule.activity_type="tưới cây"...`;
 
   try {
-    const raw = await callGroq(systemPrompt, userMessage);
+    const raw = await callGroq(systemPrompt, userMessage, 2, true);
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return { intent: 'other', reply_hint: '' };
     return JSON.parse(jsonMatch[0]);
@@ -210,9 +217,25 @@ async function handleChatMessage({ message, lat = DEFAULT_LAT, lon = DEFAULT_LON
 
   const intentResult = await parseIntent(message);
 
+  // Nếu người dùng nhắc tên địa điểm cụ thể, đổi tọa độ dùng cho toàn bộ xử lý bên dưới
+  let effectiveLat = lat;
+  let effectiveLon = lon;
+  let locationOverrideLabel = null;
+
+  if (intentResult.location_name) {
+    try {
+      const loc = await resolveLocation(intentResult.location_name);
+      effectiveLat = loc.lat;
+      effectiveLon = loc.lon;
+      locationOverrideLabel = `${loc.name}${loc.country ? ', ' + loc.country : ''}`;
+    } catch (err) {
+      logger.warn('Không thể tìm địa điểm người dùng nhắc tới', { location: intentResult.location_name, error: err.message });
+    }
+  }
+
   // ── Tạo lịch ──
   if (intentResult.intent === 'create_schedule' && intentResult.schedule) {
-    const weatherContext = await buildWeatherContext(lat, lon);
+    const weatherContext = await buildWeatherContext(effectiveLat, effectiveLon);
     const { activity_type, date, start_hour, end_hour } = intentResult.schedule;
 
     let scheduleResult = null;
@@ -223,7 +246,7 @@ async function handleChatMessage({ message, lat = DEFAULT_LAT, lon = DEFAULT_LON
         activity_type, date,
         start_hour: Number(start_hour),
         end_hour: Number(end_hour),
-        latitude: lat, longitude: lon
+        latitude: effectiveLat, longitude: effectiveLon
       });
     } catch (err) {
       scheduleError = err.message;
@@ -392,10 +415,11 @@ ${weatherContext}`;
   }
 
   // ── Hỏi thời tiết thông thường ──
-  const weatherContext = await buildWeatherContext(lat, lon);
+  const weatherContext = await buildWeatherContext(effectiveLat, effectiveLon);
   const systemPrompt = `Bạn là trợ lý thời tiết thông minh của ứng dụng dự báo thời tiết Việt Nam.
 Hãy trả lời bằng tiếng Việt, thân thiện, chính xác, dựa HOÀN TOÀN vào dữ liệu thực tế dưới đây.
 KHÔNG bịa số liệu. Nếu không có thông tin, hãy nói rõ.
+${locationOverrideLabel ? `Lưu ý: dữ liệu dưới đây là của ${locationOverrideLabel}, không phải vị trí hiện tại của người dùng.` : ''}
 ${weatherContext}`;
 
   let aiReply;
