@@ -1,3 +1,4 @@
+const { getVietnamDateString } = require('../utils/vietnamTime');
 const { supabaseClient } = require('../config/supabase');
 const { AppError } = require('../utils/appError');
 const logger = require('../config/logger');
@@ -131,7 +132,7 @@ async function updateScheduleStatus(id, status) {
 async function getPendingSchedules() {
   if (!supabaseClient) return inMemorySchedules.filter((s) => s.status === 'pending');
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = getVietnamDateString();
 
   const { data, error } = await supabaseClient
     .from('schedules')

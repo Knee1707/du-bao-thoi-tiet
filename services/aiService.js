@@ -65,7 +65,7 @@ async function buildWeatherContext(lat = DEFAULT_LAT, lon = DEFAULT_LON) {
     const f = forecastRes.data;
 
     return `
-DỮ LIỆU THỜI TIẾT THỰC TẾ (${new Date().toLocaleString('vi-VN')}):
+DỮ LIỆU THỜI TIẾT THỰC TẾ (${formatVietnamDateTime()}):
 - Nhiệt độ hiện tại: ${w.temperature}°C
 - Độ ẩm: ${w.humidity}%
 - Tốc độ gió: ${w.windSpeed} m/s
@@ -178,7 +178,7 @@ Nhiệm vụ: phân tích tin nhắn và trả về JSON theo format sau (KHÔNG
 
 CHỈ trả về JSON thuần túy, không thêm \`\`\`json hay bất kỳ chữ nào khác trước/sau.
 
-Ngày hôm nay (giờ Việt Nam): ${new Date().toLocaleDateString('vi-VN')} — ${new Date().toISOString().split('T')[0]}
+Ngày hôm nay (giờ Việt Nam): ${formatVietnamDateTime()} — ${getVietnamDateString()}
 Quy tắc giờ: "chiều nay" → 14:00-18:00, "sáng mai" → 07:00-11:00, "tối nay" → 18:00-22:00.
 
 Ví dụ:
