@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { getVietnamDateString, formatVietnamDateTime } = require('../utils/vietnamTime');
 const { groqApiKey, openWeatherApiKey } = require('../config/env');
 const { getForecast, getCurrentWeather, resolveLocation, suggestActivityWindows } = require('./weatherService');
 const { createSchedule, getSchedules, updateSchedule, deleteSchedule } = require('./scheduleService');
